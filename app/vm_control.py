@@ -103,7 +103,7 @@ class VMController:
                 raise RuntimeError(f"VMware executable not found: {cmd[0]}")
     
     def run_in_guest(self, program_path: str, args: List[str] = None, 
-                     interactive: bool = False, nowait: bool = False, workdir: Optional[str] = None) -> int:
+                     interactive: bool = True, nowait: bool = True, workdir: Optional[str] = None) -> int:
         """Run a program in the guest VM.
         
         Args:

@@ -38,6 +38,7 @@ annotator-kit/
   scripts/               # PowerShell scripts for guest execution
     run_config_guest.ps1
     eval_guest.ps1
+    # Other minimal test scripts for guest execution
   tasks/
     samples/             # OSWorld example JSON files
   runs/                  # Task execution results
