@@ -41,7 +41,7 @@ class VMController:
                 
                 # Wait a bit and check if VM is running
                 logger.info("Checking if VM started successfully...")
-                time.sleep(3)
+                time.sleep(10)
                 
                 if not self.is_running():
                     # Check if process failed immediately
@@ -64,15 +64,17 @@ class VMController:
                     logger.info("VM detected on first check!")
                 
                 logger.info("VM started successfully in fullscreen mode")
+
+                time.sleep(60) # Wait until user logs in; TODO: make a progress bar
                 
                 # Wait for user to login with progress bar
-                if self._wait_for_user_login(timeout=60):
+                if self._wait_for_user_login(timeout=10):
                     logger.info("User login detected! Proceeding with task...")
                     # Ensure fullscreen mode after login
                     time.sleep(2)
-                    self.ensure_fullscreen()
+                    # self.ensure_fullscreen()
                 else:
-                    logger.warning("User login not detected within 60 seconds")
+                    logger.warning("User login not detected within 10 detection attempts")
                     logger.info("Proceeding anyway - you may need to login manually")
                 
             except FileNotFoundError:
@@ -83,25 +85,25 @@ class VMController:
             logger.info("Starting VM in normal mode")
             
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.returncode != 0:
                     raise RuntimeError(f"Failed to start VM: {result.stderr}")
                 logger.info("VM started successfully in normal mode")
                 
                 # Wait for user to login with progress bar
-                if self._wait_for_user_login(timeout=60):
+                if self._wait_for_user_login(timeout=10):
                     logger.info("User login detected! Proceeding with task...")
                 else:
-                    logger.warning("User login not detected within 60 seconds")
+                    logger.warning("User login not detected within 10 detection attempts")
                     logger.info("Proceeding anyway - you may need to login manually")
                     
             except subprocess.TimeoutExpired:
-                raise RuntimeError("VM start timed out after 60 seconds")
+                raise RuntimeError("VM start timed out after 10 detection attempts")
             except FileNotFoundError:
                 raise RuntimeError(f"VMware executable not found: {cmd[0]}")
     
     def run_in_guest(self, program_path: str, args: List[str] = None, 
-                     interactive: bool = False, workdir: Optional[str] = None) -> int:
+                     interactive: bool = False, nowait: bool = False, workdir: Optional[str] = None) -> int:
         """Run a program in the guest VM.
         
         Args:
@@ -120,19 +122,27 @@ class VMController:
             self.vmrun_path, "-T", "ws", 
             "-gu", self.config.guest_username, 
             "-gp", self.config.guest_password,
-            "runProgramInGuest", self.vmx_path, program_path
-        ] + args
+            "runProgramInGuest", self.vmx_path
+        ]
+
+        if nowait:
+            cmd.append("-noWait")
         
         if interactive:
-            cmd.insert(-len(args)-2, "-interactive")
+            cmd += ["-interactive", "-activeWindow"]
         
         if workdir:
-            cmd.extend(["-activeWindow", "-workingDirectory", workdir])
+            cmd.extend(["-workingDirectory", workdir])
+
+        cmd.append(program_path)
+        if args:
+            cmd.extend(args)
         
         logger.info(f"Running in guest: {program_path} {' '.join(args)}")
+        logger.debug(f"> { ' '.join(f'\"{arg}\"' if ' ' in arg else arg for arg in cmd)}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
             logger.info(f"Guest program finished with return code: {result.returncode}")
             if result.stdout:
                 logger.debug(f"Guest stdout: {result.stdout}")
@@ -374,7 +384,7 @@ class VMController:
         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
         
         logger.info(f"Waiting up to {timeout} seconds for user to login to VM...")
-        logger.info("Please login to the VM manually when you see the login screen")
+        # logger.info("Please login to the VM manually when you see the login screen")
         
         with Progress(
             SpinnerColumn(),
@@ -391,14 +401,14 @@ class VMController:
                 # Check if user has logged in
                 if self.test_guest_access():
                     progress.update(task, completed=timeout)
-                    logger.info(f"✓ User login detected after {elapsed + 1} seconds!")
+                    logger.info(f"✓ User login detected after {elapsed + 1} detection attempts!")
                     return True
                 
                 # Update progress bar
                 progress.update(task, advance=1)
-                time.sleep(1)
+                # time.sleep(1)
             
-            logger.warning(f"✗ No user login detected after {timeout} seconds")
+            logger.warning(f"✗ No user login detected after {timeout} detection attempts")
             return False
     
     def _attempt_auto_login(self) -> None:
@@ -474,14 +484,10 @@ class VMController:
     def test_guest_access(self) -> bool:
         """Test if we can access the guest VM (i.e., if it's logged in)."""
         try:
-            result = subprocess.run([
-                self.vmrun_path, "-T", "ws",
-                "-gu", self.config.guest_username,
-                "-gp", self.config.guest_password,
-                "runProgramInGuest", self.vmx_path,
-                "cmd.exe", "/c", "echo", "access_test"
-            ], capture_output=True, text=True, timeout=10)
-            
+            result = subprocess.run([self.vmrun_path, "-T", "ws", 
+                               "-gu", self.config.guest_username, "-gp", self.config.guest_password,
+                               "listProcessesInGuest", self.vmx_path], 
+                              capture_output=True, text=True, encoding="mbcs", errors="replace")
             return result.returncode == 0
         except:
             return False

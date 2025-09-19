@@ -1,5 +1,6 @@
 """Main GUI application for OSWorld Annotator Kit."""
 
+import time
 import sys
 import json
 from pathlib import Path
@@ -46,6 +47,8 @@ class TaskExecutionThread(QThread):
             
             # Prepare VM for task
             prepare_for_task(self.vm, config_manager.config.snapshot_name)
+
+            time.sleep(10) # Wait for VM to fully start before running anything
             
             self.progress.emit("Executing task configuration...")
             
