@@ -3,3 +3,5 @@ password.txt
 runs
 
 app/__pycache__
+
+scripts/__pycache__

@@ -21,20 +21,20 @@ def run(cmd):
     encodings_to_try = ["utf-8", "gbk", "gb2312", "mbcs"]
     result = None
     
-    for encoding in encodings_to_try:
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding=encoding, errors="replace")
-            # 检查输出是否包含可读的中文字符
-            if result.stdout and not any(ord(c) > 65535 for c in result.stdout):
-                break
-            if result.stderr and not any(ord(c) > 65535 for c in result.stderr):
-                break
-        except:
-            continue
+    # for encoding in encodings_to_try:
+    #     try:
+    #         result = subprocess.run(cmd, capture_output=True, text=True, encoding=encoding, errors="replace")
+    #         # 检查输出是否包含可读的中文字符
+    #         if result.stdout and not any(ord(c) > 65535 for c in result.stdout):
+    #             break
+    #         if result.stderr and not any(ord(c) > 65535 for c in result.stderr):
+    #             break
+    #     except:
+    #         continue
     
-    if result is None:
-        # 如果所有编码都失败，使用默认的mbcs
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="mbcs", errors="replace")
+    # if result is None:
+    #     # 如果所有编码都失败，使用默认的mbcs
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="mbcs", errors="replace")
     
     if result.stdout:
         print("STDOUT:", result.stdout.strip())
