@@ -1,0 +1,10 @@
+vmx_path: E:/Virtual Machines/Windows 11 x64/Windows 11 x64 (2).vmx
+guest_username: user
+guest_password: password
+tasks_dir: ./tasks/samples
+output_dir: ./runs
+vmware_bin: C:/Program Files (x86)/VMware/VMware Workstation
+start_fullscreen: true
+snapshot_name: clean
+use_snapshots: true  # Now with smart detection
+attempt_auto_login: false  # Disable auto-login attempts for now

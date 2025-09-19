@@ -1,0 +1,40 @@
+{
+  "id": "simple-notepad-test",
+  "snapshot": "clean",
+  "instruction": "Open Notepad and type 'Hello World'",
+  "source": null,
+  "config": [
+    {
+      "type": "launch",
+      "parameters": {
+        "command": ["notepad"]
+      }
+    },
+    {
+      "type": "sleep",
+      "parameters": {
+        "seconds": 2
+      }
+    }
+  ],
+  "trajectory": "trajectories/",
+  "related_apps": [
+    "notepad"
+  ],
+  "evaluator": {
+    "postconfig": [],
+    "func": "exact_match",
+    "result": {
+      "type": "text_content"
+    },
+    "expected": {
+      "type": "rule",
+      "rules": {
+        "expected": "Hello World"
+      }
+    }
+  },
+  "proxy": false,
+  "fixed_ip": false,
+  "possibility_of_env_change": "low"
+}
