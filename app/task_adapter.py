@@ -99,7 +99,7 @@ class TaskRunner:
             logger.info(f"Opening URL in Chrome: {url}")
             # Use PowerShell to start Chrome with the URL
             powershell_cmd = f"Start-Process -FilePath '{chrome_path}' -ArgumentList '{url}'"
-            vm.run_in_guest("powershell.exe", ["-Command", powershell_cmd])
+            vm.run_in_guest("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", ["-Command", powershell_cmd])
             
             # Small delay between opening tabs
             time.sleep(1)

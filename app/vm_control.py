@@ -19,6 +19,9 @@ class VMController:
         self.vmrun_path = config_manager.get_vmrun_path()
         self.vmware_path = config_manager.get_vmware_path()
         self.vmx_path = self.config.vmx_path
+        self.vmrun_path = os.path.normpath(self.vmrun_path)
+        self.vmware_path = os.path.normpath(self.vmware_path)
+        self.vmx_path = os.path.normpath(self.vmx_path)
     
     def start(self, fullscreen: bool = True) -> None:
         """Start the virtual machine.
@@ -103,93 +106,145 @@ class VMController:
                 raise RuntimeError(f"VMware executable not found: {cmd[0]}")
     
     def run_in_guest(self, program_path: str, args: List[str] = None, 
-                     interactive: bool = True, nowait: bool = True, workdir: Optional[str] = None) -> int:
-        """Run a program in the guest VM.
-        
-        Args:
-            program_path: Path to the program in the guest OS
-            args: Command line arguments
-            interactive: Whether to run interactively
-            workdir: Working directory in guest OS
-            
-        Returns:
-            Return code of the executed program
-        """
+                 interactive: bool = True, nowait: bool = True, 
+                 workdir: Optional[str] = None, max_attempts: int = 10) -> int:
         if args is None:
             args = []
-        
+
         cmd = [
-            self.vmrun_path, "-T", "ws", 
-            "-gu", self.config.guest_username, 
+            self.vmrun_path, "-T", "ws",
+            "-gu", self.config.guest_username,
             "-gp", self.config.guest_password,
             "runProgramInGuest", self.vmx_path
         ]
-
         if nowait:
             cmd.append("-noWait")
-        
         if interactive:
             cmd += ["-interactive", "-activeWindow"]
-        
         if workdir:
-            cmd.extend(["-workingDirectory", workdir])
-
+            cmd += ["-workingDirectory", workdir]
         cmd.append(program_path)
-        if args:
-            cmd.extend(args)
-        
+        cmd += args
+
+        def _q(s: str) -> str:
+            return f"\"{s}\"" if (" " in s or "\t" in s) else s
+
         logger.info(f"Running in guest: {program_path} {' '.join(args)}")
-        logger.debug(f"> { ' '.join(f'\"{arg}\"' if ' ' in arg else arg for arg in cmd)}")
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=60)
-            logger.info(f"Guest program finished with return code: {result.returncode}")
-            if result.stdout:
-                logger.debug(f"Guest stdout: {result.stdout}")
-            if result.stderr:
-                logger.debug(f"Guest stderr: {result.stderr}")
-            return result.returncode
-        except subprocess.TimeoutExpired:
-            logger.error("Guest program execution timed out")
-            return -1
-        except Exception as e:
-            logger.error(f"Error running guest program: {e}")
-            return -1
+        logger.debug("> " + " ".join(_q(x) for x in cmd))
+
+        # Instead of text=True, we capture bytes and decode manually
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=False,                # capture bytes
+                    timeout=60,
+                    shell=False,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error("Guest program execution timed out")
+                return -1
+            except Exception as e:
+                logger.error(f"Error running guest program: {e}")
+                return -1
+
+            # Manually decode bytes, first try utf-8, then mbcs as fallback
+            def _decode(b: bytes) -> str:
+                if not b:
+                    return ""
+                try:
+                    return b.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Windows local code page (Chinese usually cp936)
+                    return b.decode("mbcs", errors="replace")
+
+            stdout = _decode(result.stdout)
+            stderr = _decode(result.stderr)
+
+            # First check return code
+            rc = result.returncode
+            # vmrun fails sometimes with -1 (unsigned shows 4294967295)
+            if rc == 0:
+                if stdout:
+                    logger.debug(f"Guest stdout: {stdout}")
+                if stderr:
+                    logger.debug(f"Guest stderr: {stderr}")
+                logger.info(f"Attempt {attempt}: success (rc=0)")
+                return 0
+
+            # If return code is non-zero, log details and check stdout for error keywords
+            if stdout:
+                logger.debug(f"Guest stdout: {stdout}")
+            if stderr:
+                logger.debug(f"Guest stderr: {stderr}")
+
+            # Some versions of vmrun print "Error:" to stdout
+            is_definitely_error = ("Error:" in stdout) or ("错误" in stdout) or ("失败" in stdout)
+
+            logger.warning(f"Attempt {attempt}: non-zero return code {rc}"
+                        + (" (error text in stdout)" if is_definitely_error else ""))
+
+            if attempt < max_attempts:
+                time.sleep(5)
+                logger.info("Retrying guest program in 5 seconds...")
+            else:
+                logger.debug(f"Guest program execution failed after {max_attempts} attempts")
+                return rc if rc != 0 else -1
+
+    def _run_vmrun(self, args: List[str], timeout: int = 120):
+        proc = subprocess.run(
+            [self.vmrun_path] + args,
+            capture_output=True,
+            text=False,            # bytes!
+            timeout=timeout,
+            shell=False,
+        )
+        def _decode(b: bytes) -> str:
+            if not b: return ""
+            try:
+                return b.decode("utf-8")
+            except UnicodeDecodeError:
+                return b.decode("mbcs", errors="replace")
+        stdout = _decode(proc.stdout)
+        stderr = _decode(proc.stderr)
+        return proc.returncode, stdout, stderr
     
     def copy_to_guest(self, host_path: str, guest_path: str) -> None:
-        """Copy file from host to guest VM."""
-        cmd = [
-            self.vmrun_path, "-T", "ws",
+        args = [
+            "-T", "ws",
             "-gu", self.config.guest_username,
             "-gp", self.config.guest_password,
-            "copyFileFromHostToGuest", self.vmx_path, host_path, guest_path
+            "CopyFileFromHostToGuest",
+            self.vmx_path,
+            host_path,
+            guest_path,
         ]
-        
         logger.info(f"Copying to guest: {host_path} -> {guest_path}")
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to copy to guest: {result.stderr}")
-            logger.info("File copied to guest successfully")
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Copy to guest timed out")
+        returncode, stdout, stderr = self._run_vmrun(args, timeout=60)
+        if returncode != 0:
+            raise RuntimeError(f"Failed to copy to guest: stdout={stdout}, stderr={stderr}")
+        logger.info("File copied to guest successfully")
+
     
     def copy_from_guest(self, guest_path: str, host_path: str) -> None:
         """Copy file from guest VM to host."""
-        cmd = [
-            self.vmrun_path, "-T", "ws",
+        args = [
+            "-T", "ws",
             "-gu", self.config.guest_username,
             "-gp", self.config.guest_password,
-            "copyFileFromGuestToHost", self.vmx_path, guest_path, host_path
+            "CopyFileFromGuestToHost",
+            self.vmx_path,
+            guest_path,
+            host_path,
         ]
         
         logger.info(f"Copying from guest: {guest_path} -> {host_path}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to copy from guest: {result.stderr}")
+            returncode, stdout, stderr = self._run_vmrun(args, timeout=60)
+            if returncode != 0:
+                raise RuntimeError(f"Failed to copy from guest: stdout={stdout}, stderr={stderr}")
             logger.info("File copied from guest successfully")
         except subprocess.TimeoutExpired:
             raise RuntimeError("Copy from guest timed out")
@@ -198,35 +253,25 @@ class VMController:
         """Quick check if snapshot revert is possible without actually doing it."""
         # First check if vmrun is accessible
         try:
-            test_result = subprocess.run([self.vmrun_path, "-T", "ws", "list"], 
-                                       capture_output=True, text=True, timeout=3)
-            if test_result.returncode != 0:
+            returncode, stdout, stderr = self._run_vmrun(["-T", "ws", "listSnapshots", self.vmx_path], timeout=3)
+            if returncode != 0:
                 return False
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         
         # Quick test to see if we can list snapshots (this will fail fast if encrypted)
         try:
-            list_cmd = [self.vmrun_path, "-T", "ws", "listSnapshots", self.vmx_path]
-            result = subprocess.run(list_cmd, capture_output=True, text=True, timeout=5)
+            returncode, stdout, stderr = self._run_vmrun(["-T", "ws", "listSnapshots", self.vmx_path], timeout=5)
             
-            if result.returncode != 0:
-                error_msg = result.stderr.lower()
+            if returncode != 0:
+                error_msg = (stderr or "").lower()
                 if "encrypted" in error_msg or "password" in error_msg:
                     logger.info("VM is encrypted, snapshot operations not available")
                     return False
                 elif "not found" in error_msg:
                     logger.info("VM file not found")
                     return False
-                return False
-            
-            # Check if the specific snapshot exists
-            if name in result.stdout:
-                return True
-            else:
-                logger.info(f"Snapshot '{name}' not found in available snapshots")
-                return False
-                
+                return name in stdout
         except subprocess.TimeoutExpired:
             logger.info("Snapshot list timed out")
             return False
@@ -250,122 +295,81 @@ class VMController:
             time.sleep(2)
         
         # Now do the actual revert (we know it should work)
-        cmd = [self.vmrun_path, "-T", "ws", "revertToSnapshot", self.vmx_path, name]
+        args = ["-T", "ws", "revertToSnapshot", self.vmx_path, name]
         logger.info(f"Reverting to snapshot: {name}")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            if result.returncode == 0:
+            returncode, stdout, stderr = self._run_vmrun(args, timeout=15)
+            if returncode == 0:
                 logger.info("Snapshot reverted successfully")
             else:
-                logger.warning(f"Snapshot revert failed: {result.stderr}")
+                logger.warning(f"Snapshot revert failed: {stderr}")
         except subprocess.TimeoutExpired:
             logger.warning("Snapshot revert timed out")
+        except Exception as e:
+            logger.warning(f"Snapshot revert failed: {e}")
     
     def stop(self) -> None:
         """Stop the virtual machine."""
-        cmd = [
-            self.vmrun_path, "-T", "ws",
-            "stop", self.vmx_path, "soft"
-        ]
+        args = ["-T", "ws", "stop", self.vmx_path, "soft"]
         
         logger.info("Stopping VM")
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode != 0:
-                logger.warning(f"Soft stop failed: {result.stderr}, trying hard stop")
+            returncode, stdout, stderr = self._run_vmrun(args, timeout=60)
+            if returncode != 0:
+                logger.warning(f"Soft stop failed: {stderr}, trying hard stop")
                 # Try hard stop
-                cmd[-1] = "hard"
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                args[-1] = "hard"
+                returncode, stdout, stderr = self._run_vmrun(args, timeout=30)
             logger.info("VM stopped successfully")
         except subprocess.TimeoutExpired:
             logger.warning("VM stop timed out")
+        except Exception as e:
+            logger.warning(f"VM stop failed: {e}")
     
     def is_running(self) -> bool:
         """Check if the VM is currently running."""
-        cmd = [self.vmrun_path, "list"]
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                logger.warning(f"Failed to list VMs: {result.stderr}")
-                return False
-            
-            # Debug: show what vmrun list returns
-            logger.debug(f"vmrun list output: {result.stdout}")
-            logger.debug(f"Looking for VM path: {self.vmx_path}")
-            
-            # Check if our VM is in the list - try multiple comparison methods
-            vm_list = result.stdout.strip()
-            
-            # Method 1: Direct path match
-            if self.vmx_path in vm_list:
-                logger.debug("VM found via direct path match")
-                return True
-            
-            # Method 2: Normalize paths and compare
-            import os
-            normalized_path = os.path.normpath(self.vmx_path).replace('\\', '/')
-            if normalized_path in vm_list:
-                logger.debug("VM found via normalized path match")
-                return True
-            
-            # Method 3: Check if any line contains the VM name
-            vm_name = os.path.basename(self.vmx_path)
-            if vm_name in vm_list:
-                logger.debug("VM found via filename match")
-                return True
-            
-            # Method 4: Case-insensitive check
-            if self.vmx_path.lower() in vm_list.lower():
-                logger.debug("VM found via case-insensitive match")
-                return True
-            
-            logger.debug("VM not found in running list")
+        args = ["list"]
+        returncode, stdout, stderr = self._run_vmrun(args, timeout=30)
+        if returncode != 0:
+            logger.warning(f"Failed to list VMs: {stderr}")
             return False
-            
-        except subprocess.TimeoutExpired:
-            logger.warning("VM list command timed out")
-            return False
-        except Exception as e:
-            logger.warning(f"Error checking VM status: {e}")
-            return False
+        vm_list = stdout.strip()
+        # Use normalized path for comparison
+        norm_vmx = os.path.normpath(self.vmx_path)
+        if norm_vmx in vm_list or norm_vmx.replace('\\', '/') in vm_list:
+            return True
+        base = os.path.basename(norm_vmx)
+        return (base in vm_list) or (norm_vmx.lower() in vm_list.lower())
+
     
     def ensure_guest_dir(self, path: str) -> None:
         """Ensure a directory exists in the guest VM."""
-        powershell_cmd = f"New-Item -ItemType Directory -Force -Path '{path}'"
-        self.run_in_guest("powershell.exe", ["-Command", powershell_cmd])
+        ps = f"New-Item -ItemType Directory -Force -Path '{path}'"
+        self.run_in_guest(
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            interactive=False, nowait=False
+        )
     
     def _wait_for_vm_ready(self) -> None:
         """Wait for VM to be fully ready for operations."""
         logger.info("Waiting for VM to be fully ready...")
         max_attempts = 15  # Reduced to 15 seconds
-        
-        for attempt in range(max_attempts):
+
+        for _ in range(max_attempts):
             try:
-                logger.debug(f"Attempt {attempt + 1}/{max_attempts} to check VM readiness")
-                
-                # Try to run a simple command to check if VM is responsive
-                result = subprocess.run([
-                    self.vmrun_path, "-T", "ws",
-                    "-gu", self.config.guest_username,
-                    "-gp", self.config.guest_password,
-                    "runProgramInGuest", self.vmx_path,
-                    "cmd.exe", "/c", "echo", "test"
-                ], capture_output=True, text=True, timeout=5)  # Reduced timeout
-                
-                if result.returncode == 0:
+                args = [
+                    "-T","ws","-gu",self.config.guest_username,"-gp",self.config.guest_password,
+                    "runProgramInGuest", self.vmx_path, "cmd.exe","/c","echo","test"
+                ]
+                rc, stdout, stderr = self._run_vmrun(args, timeout=5)
+                if rc == 0:
                     logger.info("VM is ready for operations")
                     return
-                else:
-                    logger.debug(f"VM not ready yet, error: {result.stderr}")
-                    
             except subprocess.TimeoutExpired:
-                logger.debug("VM readiness check timed out")
-            except Exception as e:
-                logger.debug(f"VM readiness check failed: {e}")
-            
+                pass
             time.sleep(1)
         
         logger.info("VM readiness check timed out, but VM is running. Proceeding anyway...")
@@ -411,84 +415,20 @@ class VMController:
             logger.warning(f"✗ No user login detected after {timeout} detection attempts")
             return False
     
-    def _attempt_auto_login(self) -> None:
-        """Attempt to automatically login to the guest VM."""
-        logger.info("Attempting automatic login to guest VM")
-        
-        try:
-            # Wait for login screen to appear
-            logger.info("Waiting for login screen to appear...")
-            time.sleep(5)
-            
-            # Try different login methods for Windows 11
-            login_successful = False
-            
-            # Method 1: Try clicking on screen and entering password (Windows 11 style)
-            logger.info("Method 1: Trying Windows 11 click-and-password login...")
-            self._send_keys_to_vm("space")  # Wake up screen
-            time.sleep(1)
-            self._send_keys_to_vm("Return")  # Click on user
-            time.sleep(2)
-            self._send_keys_to_vm(self.config.guest_password)
-            self._send_keys_to_vm("Return")
-            time.sleep(3)
-            
-            if self.test_guest_access():
-                logger.info("Method 1 successful!")
-                login_successful = True
-            else:
-                # Method 2: Try traditional username/password
-                logger.info("Method 1 failed, trying Method 2: Traditional login...")
-                self._send_keys_to_vm("ctrl+alt+Delete")  # Secure login
-                time.sleep(2)
-                self._send_keys_to_vm(self.config.guest_username)
-                self._send_keys_to_vm("Tab")
-                self._send_keys_to_vm(self.config.guest_password)
-                self._send_keys_to_vm("Return")
-                time.sleep(5)
-                
-                if self.test_guest_access():
-                    logger.info("Method 2 successful!")
-                    login_successful = True
-            
-            if not login_successful:
-                logger.warning("Auto-login failed with both methods")
-                logger.info("Recommendation: Configure VM for auto-login or login manually")
-                logger.info("VM is running and ready for manual interaction")
-                
-        except Exception as e:
-            logger.warning(f"Auto-login attempt failed: {e}")
-            logger.info("You may need to manually login to the VM")
-    
-    def _send_keys_to_vm(self, keys: str) -> None:
-        """Send keystrokes directly to the VM using vmrun."""
-        try:
-            # Use vmrun's sendKeystrokes command
-            cmd = [
-                self.vmrun_path, "-T", "ws",
-                "sendKeystrokes", self.vmx_path, keys
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode != 0:
-                logger.debug(f"Failed to send keys '{keys}': {result.stderr}")
-            else:
-                logger.debug(f"Successfully sent keys: {keys}")
-                
-            # Small delay between keystrokes
-            time.sleep(0.5)
-            
-        except Exception as e:
-            logger.debug(f"Error sending keys '{keys}': {e}")
+    # Auto-login functionality removed - VM configured with auto-login software instead
     
     def test_guest_access(self) -> bool:
         """Test if we can access the guest VM (i.e., if it's logged in)."""
         try:
-            result = subprocess.run([self.vmrun_path, "-T", "ws", 
-                               "-gu", self.config.guest_username, "-gp", self.config.guest_password,
-                               "listProcessesInGuest", self.vmx_path], 
-                              capture_output=True, text=True, encoding="mbcs", errors="replace")
-            return result.returncode == 0
+            args = [
+                "-T", "ws", 
+                "-gu", self.config.guest_username, 
+                "-gp", self.config.guest_password,
+                "listProcessesInGuest", 
+                self.vmx_path
+            ]
+            returncode, stdout, stderr = self._run_vmrun(args)
+            return returncode == 0
         except:
             return False
     

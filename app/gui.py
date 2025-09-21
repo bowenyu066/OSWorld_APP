@@ -48,7 +48,9 @@ class TaskExecutionThread(QThread):
             # Prepare VM for task
             prepare_for_task(self.vm, config_manager.config.snapshot_name)
 
-            time.sleep(10) # Wait for VM to fully start before running anything
+            self.progress.emit("Waiting for system to get ready...")
+
+            time.sleep(40) # Wait for VM to fully start before running anything; TODO: make a progress bar
             
             self.progress.emit("Executing task configuration...")
             
@@ -165,7 +167,7 @@ class AnnotatorKitGUI(QMainWindow):
         button_layout.addWidget(self.start_button)
         
         self.validate_button = QPushButton("Validate")
-        self.validate_button.setEnabled(False)  # Disabled for Day 1
+        self.validate_button.setEnabled(False)  # Enabled after task execution
         self.validate_button.clicked.connect(self.validate_task)
         self.validate_button.setStyleSheet("QPushButton { background-color: #2196F3; color: white; padding: 10px; font-size: 14px; }")
         button_layout.addWidget(self.validate_button)
@@ -292,13 +294,13 @@ class AnnotatorKitGUI(QMainWindow):
         
         # Re-enable buttons
         self.start_button.setEnabled(True)
-        # Note: validate_button remains disabled for Day 1
         
         # Show result
         if success:
             self.add_status_message(f"✓ {message}")
             self.status_bar.showMessage("Task execution completed successfully")
-            # For Day 1, we don't enable validate button yet
+            # Enable validate button for Day 2
+            self.validate_button.setEnabled(True)
         else:
             self.add_status_message(f"✗ {message}")
             self.status_bar.showMessage("Task execution failed")
@@ -309,9 +311,68 @@ class AnnotatorKitGUI(QMainWindow):
         if not self.current_task or not self.current_run_id:
             return
         
-        # TODO: Day 2 - Implement task validation
-        self.add_status_message("Task validation not implemented yet (Day 2 feature)")
-        self.show_info("Not Implemented", "Task validation will be implemented in Day 2")
+        # Disable validate button during validation
+        self.validate_button.setEnabled(False)
+        
+        # Show progress
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.add_status_message("Starting task validation...")
+        
+        try:
+            # Create VM controller and evaluator runner
+            vm = VMController()
+            evaluator_runner = EvaluatorRunner()
+            
+            # Prepare guest environment
+            self.add_status_message("Preparing guest environment for evaluation...")
+            evaluator_runner.prepare_guest_env(vm)
+            
+            # Get run directory
+            run_dir = config_manager.get_output_dir() / self.current_run_id
+            
+            # Run evaluation
+            self.add_status_message("Running evaluation in guest VM...")
+            result = evaluator_runner.run(self.current_task, vm, host_runs_dir=str(run_dir))
+            
+            # Save evaluation result
+            eval_result_file = run_dir / "eval_result.json"
+            with open(eval_result_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            
+            # Create notes.txt placeholder
+            notes_file = run_dir / "notes.txt"
+            if not notes_file.exists():
+                with open(notes_file, 'w', encoding='utf-8') as f:
+                    f.write("# Annotator Notes\n")
+                    f.write("# Add your notes about this task execution here\n")
+            
+            # Show result
+            passed = result.get('passed', False)
+            if passed:
+                self.add_status_message("✓ Task validation PASSED")
+                self.status_bar.showMessage("Task validation completed - PASSED")
+                self.show_validation_result("Validation Passed", "The task was completed successfully!", True)
+            else:
+                details = result.get('details', {})
+                error_msg = details.get('error', 'Unknown validation error')
+                self.add_status_message(f"✗ Task validation FAILED: {error_msg}")
+                self.status_bar.showMessage("Task validation completed - FAILED")
+                self.show_validation_result("Validation Failed", f"The task validation failed:\n\n{error_msg}", False)
+            
+            self.add_status_message(f"Results saved to: {run_dir}")
+            
+        except Exception as e:
+            error_msg = f"Validation error: {str(e)}"
+            logger.error(error_msg)
+            self.add_status_message(f"✗ {error_msg}")
+            self.status_bar.showMessage("Task validation failed")
+            self.show_error("Validation Error", error_msg)
+        
+        finally:
+            # Hide progress bar and re-enable button
+            self.progress_bar.setVisible(False)
+            self.validate_button.setEnabled(True)
     
     def add_status_message(self, message: str):
         """Add a status message to the status text area."""
@@ -327,6 +388,21 @@ class AnnotatorKitGUI(QMainWindow):
     def show_info(self, title: str, message: str):
         """Show an info message dialog."""
         QMessageBox.information(self, title, message)
+    
+    def show_validation_result(self, title: str, message: str, passed: bool):
+        """Show validation result with appropriate styling."""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        
+        if passed:
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setStyleSheet("QMessageBox { background-color: #d4edda; }")
+        else:
+            msg_box.setIcon(QMessageBox.Warning)
+            msg_box.setStyleSheet("QMessageBox { background-color: #f8d7da; }")
+        
+        msg_box.exec()
 
 
 def main():

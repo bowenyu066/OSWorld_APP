@@ -18,7 +18,7 @@ class AppConfig(BaseModel):
     start_fullscreen: bool = Field(True, description="Start VM in fullscreen mode")
     snapshot_name: str = Field("clean", description="Default snapshot name to revert to")
     use_snapshots: bool = Field(True, description="Whether to use snapshot revert before tasks")
-    attempt_auto_login: bool = Field(False, description="Whether to attempt automatic login (experimental)")
+    # Auto-login removed - VM configured with dedicated auto-login software
 
 
 class ConfigManager:
