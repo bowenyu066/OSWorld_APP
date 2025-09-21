@@ -41,6 +41,12 @@ class EvaluatorRunner:
                 guest_req_path = f"{self.guest_evaluator_dir}\\requirements.txt"
                 vm.copy_to_guest(str(host_requirements), guest_req_path)
                 logger.info(f"Copied requirements to guest: {guest_req_path}")
+                vm.run_in_guest(
+                    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", f"pip install -r {guest_req_path}"],
+                    interactive=True, nowait=True
+                )
+                
             
             logger.info("Guest environment preparation completed")
             
@@ -132,7 +138,8 @@ class EvaluatorRunner:
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", 
                 powershell_args, 
                 interactive=False, 
-                nowait=False
+                nowait=False,
+                max_attempts=2
             )
             
             if return_code != 0:

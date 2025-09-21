@@ -13,9 +13,16 @@ class Action(BaseModel):
 class Evaluator(BaseModel):
     """Represents task evaluation configuration."""
     postconfig: List[Action] = Field(default_factory=list, description="Post-execution configuration")
-    func: str = Field(..., description="Evaluation function name")
-    result: Dict[str, Any] = Field(default_factory=dict, description="Result configuration")
-    expected: Dict[str, Any] = Field(default_factory=dict, description="Expected result")
+    func: Any = Field(..., description="Evaluation function name (string or list)")
+    result: Any = Field(default_factory=dict, description="Result configuration (dict or list)")
+    expected: Any = Field(default_factory=dict, description="Expected result (dict or list)")
+    
+    @property
+    def func_name(self) -> str:
+        """Get the primary function name."""
+        if isinstance(self.func, list):
+            return self.func[0] if self.func else "unknown"
+        return str(self.func)
 
 
 class Task(BaseModel):
