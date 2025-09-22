@@ -15,7 +15,7 @@ A GUI application for human annotators to perform OSWorld benchmark tasks in VMw
    pip install -e .
    ```
 
-2. Configure the application by editing `config.yaml` (will be created automatically on first run)
+2. Configure the application by editing `config.yaml`
 
 3. Start the application:
    ```bash
